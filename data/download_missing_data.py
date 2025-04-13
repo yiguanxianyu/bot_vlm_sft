@@ -15,6 +15,6 @@ for file in missing_data:
         filename=file,
         repo_type="dataset",  # 数据集类型必须设置为 "dataset"
         token=os.environ["HF_TOKEN"],
-    endpoint="https://hf-mirror.com",  # 设置镜像端点
-    local_dir="/data1/",
-)
+        endpoint="https://hf-mirror.com",  # 设置镜像端点
+        local_dir="/data1/",
+    )

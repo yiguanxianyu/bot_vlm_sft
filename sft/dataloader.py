@@ -1,3 +1,10 @@
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+import constants as C
+import av
+import numpy as np
+
 """
 Data loader for AgiBotSFT dataset.
 
@@ -45,13 +52,13 @@ Each JSON file contains task information in the format shown in the example belo
     }
 ]
 """
-import json
-from pathlib import Path
+
+av.logging.set_level(av.logging.VERBOSE)
 
 # from transformers import Qwen2.5
 
 
-class AgiBotSFTDataSet():
+class AgiBotSFTDataSet:
     """
     PyTorch Dataset for loading robot task execution data.
 
@@ -92,42 +99,56 @@ class AgiBotSFTDataSet():
                 task_info = json.load(f)
 
             for episode in task_info:
-                video_path = self.video_root / jsonfile.stem[5:] / str(episode["episode_id"]) / "videos" / "head_color.mp4"
+                video_path = (
+                    self.video_root
+                    / jsonfile.stem[5:]
+                    / str(episode["episode_id"])
+                    / "videos"
+                    / "head_color.mp4"
+                )
                 if video_path.exists():
                     self.data_path.append((video_path, episode))
 
-    def load_video(self, video_path: Path, fps: int):
+    def load_video(self, video_path: Path, num_frames: int) -> List[np.ndarray]:
         """
         Evenly sample frames from a video file.
 
         Args:
             video_path (Path): Path to the video file
-            fps (int): Destination frame rate of the video
+            num_frames (int): Number of frames to sample
 
         Returns:
             list: List of sampled video frames
         """
-        pass
-        # video = pyav.open(video_path)
-        # video_stream = video.streams.video[0]
-        # video_stream.start_time = 0
-        # video_stream.time_base = 1 / fps
-        # frames = []
-        # for frame in video_stream.iter_frames(fps):
-        #     frames.append(frame)
-        # return frames
+        with av.open(video_path) as container:
+            video_stream = container.streams.video[0]
 
-    def load_text(self, text_path: Path):
-        """
-        Load text from a file.
-        """
-        with open(text_path, "r") as f:
-            return f.read()
+            assert len(container.streams.video) > 0, (
+                f"No video stream found in {video_path}"
+            )
+            assert video_stream.frames >= num_frames, (
+                f"Video has only {video_stream.frames} frames, but {num_frames} are requested."
+            )
+
+            frames_to_extract = num_frames
+            video_seconds = float(video_stream.time_base * video_stream.duration)
+            sample_interval = av.time_base * video_seconds / (frames_to_extract - 1)
+
+            frames = []
+            for index in range(frames_to_extract):
+                timestamp_us = int(index * sample_interval)
+                container.seek(timestamp_us)
+                frame = container.decode(video=0)
+                image = next(iter(frame)).to_rgb().to_ndarray()
+                frames.append(image)
+
+        return frames  # F, H, W, C
+
 
 if __name__ == "__main__":
     from pprint import pprint
+
     dataset = AgiBotSFTDataSet(Path("/mnt/nvme/sft_data"), 32)
     print(len(dataset))
     video_frames, episode = dataset[0]
-    pprint(episode,indent=2,width=160)
-
+    pprint(episode, indent=2, width=160)
