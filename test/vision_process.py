@@ -38,9 +38,7 @@ FPS_MAX_FRAMES = 768
 # Set the maximum number of video token inputs.
 # Here, 128K represents the maximum number of input tokens for the VLLM model.
 # Remember to adjust it according to your own configuration.
-VIDEO_TOTAL_PIXELS = int(
-    float(os.environ.get("VIDEO_MAX_PIXELS", 128000 * 28 * 28 * 0.9))
-)
+VIDEO_TOTAL_PIXELS = int(float(os.environ.get("VIDEO_MAX_PIXELS", 128000 * 28 * 28 * 0.9)))
 logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 
 
@@ -95,17 +93,13 @@ def smart_resize(
 def to_rgb(pil_image: Image.Image) -> Image.Image:
     if pil_image.mode == "RGBA":
         white_background = Image.new("RGB", pil_image.size, (255, 255, 255))
-        white_background.paste(
-            pil_image, mask=pil_image.split()[3]
-        )  # Use alpha channel as mask
+        white_background.paste(pil_image, mask=pil_image.split()[3])  # Use alpha channel as mask
         return white_background
     else:
         return pil_image.convert("RGB")
 
 
-def fetch_image(
-    ele: dict[str, str | Image.Image], size_factor: int = IMAGE_FACTOR
-) -> Image.Image:
+def fetch_image(ele: dict[str, str | Image.Image], size_factor: int = IMAGE_FACTOR) -> Image.Image:
     if "image" in ele:
         image = ele["image"]
     else:
@@ -176,9 +170,7 @@ def smart_nframes(
     Returns:
         int: the number of frames for video used for model inputs.
     """
-    assert not ("fps" in ele and "nframes" in ele), (
-        "Only accept either `fps` or `nframes`"
-    )
+    assert not ("fps" in ele and "nframes" in ele), "Only accept either `fps` or `nframes`"
     if "nframes" in ele:
         nframes = round_by_factor(ele["nframes"], FRAME_FACTOR)
     else:
@@ -189,9 +181,7 @@ def smart_nframes(
         )
         nframes = total_frames / video_fps * fps
         if nframes > total_frames:
-            logger.warning(
-                f"smart_nframes: nframes[{nframes}] > total_frames[{total_frames}]"
-            )
+            logger.warning(f"smart_nframes: nframes[{nframes}] > total_frames[{total_frames}]")
         nframes = min(min(max(nframes, min_frames), max_frames), total_frames)
         nframes = floor_by_factor(nframes, FRAME_FACTOR)
     if not (FRAME_FACTOR <= nframes and nframes <= total_frames):
@@ -203,6 +193,7 @@ def smart_nframes(
 
 def _read_video_torchvision(
     ele: dict,
+    resize_factor: float = 1.0,
 ) -> (torch.Tensor, float):
     """read video using torchvision.io.read_video
 
@@ -250,6 +241,7 @@ def is_decord_available() -> bool:
 
 def _read_video_decord(
     ele: dict,
+    resize_factor: float = 1.0,
 ) -> (torch.Tensor, float):
     """read video using decord.VideoReader
 
@@ -269,9 +261,7 @@ def _read_video_decord(
     vr = decord.VideoReader(video_path)
     # TODO: support start_pts and end_pts
     if "video_start" in ele or "video_end" in ele:
-        raise NotImplementedError(
-            "not support start_pts and end_pts in decord for now."
-        )
+        raise NotImplementedError("not support start_pts and end_pts in decord for now.")
     total_frames, video_fps = len(vr), vr.get_avg_fps()
     logger.info(
         f"decord:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s"
@@ -291,9 +281,7 @@ def is_pyav_available() -> bool:
     return importlib.util.find_spec("av") is not None
 
 
-def _read_video_pyav(
-    ele: dict,
-) -> tuple[torch.Tensor, float]:
+def _read_video_pyav(ele: dict, resize_factor: float = 1.0) -> tuple[torch.Tensor, float]:
     """read video using av (PyAV) library.
 
     Args:
@@ -306,14 +294,14 @@ def _read_video_pyav(
     """
 
     video_path = ele["video"]
-    if "file://" in video_path:
+    if video_path.startswith("file://"):
         video_path = video_path[7:]
     # TODO: Implement start/end time seeking if needed
     if "video_start" in ele or "video_end" in ele:
-        warnings.warn("PyAV reader does not support start/end times yet.")
-        # raise NotImplementedError("PyAV reader does not support start_pts and end_pts for now.")
+        # warnings.warn("PyAV reader does not support start/end times yet.")
+        raise NotImplementedError("PyAV reader does not support start_pts and end_pts for now.")
 
-    st = time.time()
+    start_time = time.time()
     container = None
     try:
         container = av.open(video_path)
@@ -323,139 +311,57 @@ def _read_video_pyav(
         video_fps = float(stream.average_rate)
         total_frames = stream.frames
 
-        if (
-            total_frames == 0
-            and stream.duration is not None
-            and stream.time_base is not None
-        ):
+        if total_frames == 0 and stream.duration is not None and stream.time_base is not None:
             duration = float(stream.duration * stream.time_base)
             total_frames = int(duration * video_fps)
             logger.warning(
                 f"PyAV: stream.frames is 0, estimating total_frames as {total_frames} based on duration {duration} and fps {video_fps}."
             )
 
-        if total_frames <= 0:  # Use <= to catch 0 and potential negative values
-            # If still 0 or less, maybe try iterating once to count? Could be slow.
-            logger.warning(
-                f"PyAV: Could not determine total frames accurately (got {total_frames}). Frame sampling might be incorrect."
-            )
-            # Try to decode at least one frame to see if the video is valid
-            try:
-                frame = next(container.decode(stream))
-                total_frames = 1  # Set to 1 temporarily if we can decode one frame
-                logger.warning(
-                    "PyAV: Successfully decoded one frame. Proceeding with estimated total_frames=1 for sampling, which may be inaccurate."
-                )
-                container.seek(-1, whence="frame")  # Reset stream to beginning
-            except StopIteration:
-                logger.error("PyAV: Video appears to have no frames.")
-                raise ValueError("PyAV: Video appears to have no frames.")
-            except Exception as e_dec:
-                logger.error(f"PyAV: Error decoding first frame: {e_dec}")
-                raise ValueError(
-                    f"PyAV: Could not decode video frames from {video_path}"
-                )
+        assert total_frames > 0, "Total frames should be greater than 0."
 
         logger.info(
-            f"PyAV:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s"
+            f"PyAV:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - start_time:.3f}s"
         )
 
         nframes = smart_nframes(ele, total_frames=total_frames, video_fps=video_fps)
-
-        # Ensure indices computation doesn't fail with total_frames=0 or 1
-        if total_frames <= 0:
-            logger.error(
-                "PyAV: Cannot proceed with 0 or negative total_frames after checks."
-            )
-            raise ValueError("Could not determine video duration/frames.")
-        elif total_frames == 1:
-            indices = [0] * nframes  # Repeat the single frame if necessary
-        else:
-            indices = (
-                torch.linspace(0, total_frames - 1, nframes).round().long().tolist()
-            )
-
-        target_indices_ordered = sorted(list(set(indices)))  # Get unique sorted indices
-
+        assert total_frames >= nframes, "Cannot proceed with total_frames < nframes."
         # Re-adjust nframes based on unique indices found, important for sample_fps calculation
-        nframes_unique = len(target_indices_ordered)
+        # Usually nframes_unique is equal to nframes, but if the video is very short,
+        # nframes_unique might be less than nframes
+        nframes_unique = (
+            torch.linspace(0, total_frames - 1, nframes).round().long().unique().size(0)
+        )
+        video_seconds = float(stream.time_base * stream.duration)
+        sample_interval = av.time_base * video_seconds / (nframes_unique - 1)
 
-        # video_seconds = float(stream.time_base * stream.duration)
-        # sample_interval = av.time_base * video_seconds / (nframes_unique - 1)
+        frames = []
+        for index in range(nframes_unique):
+            timestamp_us = int(index * sample_interval)
+            container.seek(timestamp_us)
+            frame = next(iter(container.decode(video=0)))
+            image = frame.to_image()
+            # ------ resize ------
+            new_width = int(image.width * resize_factor)
+            new_height = int(image.height * resize_factor)
+            image = image.resize(
+                (new_width, new_height),
+                resample=Image.Resampling.LANCZOS,
+            ).convert("RGB")
+            # ------ resize ------
+            image = torch.from_numpy(np.array(image)).permute(2, 0, 1)
+            frames.append(image)
 
-        # for index in range(nframes_unique):
-        #     timestamp_us = int(index * sample_interval)
-        #     container.seek(timestamp_us)
-        #     frame = container.decode(video=0)
-        #     image = next(iter(frame)).to_rgb().to_ndarray(format="rgb24")
-        #     image = torch.from_numpy(image).permute(2, 0, 1)
-
-        frames = {}  # Store frames in dict with index key to handle duplicate indices from linspace
-        frame_count = 0
-        target_idx_ptr = 0
-
-        # Reset stream iterator by seeking to beginning before iterating
-        container.seek(-1, stream=stream)
-
-        for frame in container.decode(stream):
-            if target_idx_ptr >= len(target_indices_ordered):
-                break  # Optimization: stop decoding if all required frames are collected
-
-            current_target_idx = target_indices_ordered[target_idx_ptr]
-
-            # Rely on the iteration order and count
-            if frame_count == current_target_idx:
-                # Convert av.VideoFrame to numpy array (H, W, C) uint8
-                try:
-                    frame_np = frame.to_ndarray(format="rgb24")
-                    # Convert to torch tensor (C, H, W) uint8
-                    frame_tensor = torch.tensor(frame_np).permute(2, 0, 1)
-                    frames[current_target_idx] = frame_tensor
-                    target_idx_ptr += 1
-                except Exception as frame_conv_e:
-                    logger.warning(
-                        f"PyAV: Failed to convert frame {frame_count}: {frame_conv_e}. Skipping."
-                    )
-
-            frame_count += 1
+        video = torch.stack(frames)  # TCHW, uint8
+        # Use nframes (potentially with duplicates) for sample_fps calculation as it reflects the desired temporal density
+        sample_fps = nframes / total_frames * video_fps
 
         # If loop finishes before collecting all frames (e.g., video shorter than expected)
-        if len(frames) < nframes_unique:
-            logger.warning(
-                f"PyAV: Collected {len(frames)} unique frames, expected {nframes_unique}. Video might be shorter than metadata indicates."
-            )
-            if not frames:
-                raise ValueError(
-                    f"PyAV: Failed to decode any frames for video {video_path}"
-                )
-
-        # Assemble final tensor respecting original possibly duplicated indices from linspace
-        final_frames = []
-        last_frame = None
-        for idx in indices:
-            if idx in frames:
-                final_frames.append(frames[idx])
-                last_frame = frames[idx]
-            elif last_frame is not None:
-                logger.warning(
-                    f"PyAV: Frame {idx} not found (likely end of video), duplicating last available frame."
-                )
-                final_frames.append(last_frame)
-            else:
-                # This should not happen if we checked `if not frames` earlier
-                raise ValueError(
-                    f"PyAV: Frame {idx} not found and no previous frame available."
-                )
-
-        video = torch.stack(final_frames)  # TCHW, uint8
-        # Use nframes (potentially with duplicates) for sample_fps calculation as it reflects the desired temporal density
-        sample_fps = nframes / max(total_frames, 1e-6) * video_fps
-
+        assert len(frames) >= nframes_unique, "Cannot proceed with len(frames) < nframes_unique."
         # Log final shape and time
         logger.info(
-            f"PyAV: Decoded {video.shape[0]} frames (requested {nframes}), shape={video.shape}, time={time.time() - st:.3f}s"
+            f"PyAV: Decoded {video.shape[0]} frames (requested {nframes}), shape={video.shape}, time={time.time() - start_time:.3f}s"
         )
-
         return video, sample_fps
 
     except av.AVError as e:
@@ -494,9 +400,7 @@ def get_video_reader_backend() -> str:
     elif is_decord_available():
         video_reader_backend = "decord"
     else:
-        video_reader_backend = (
-            "torchvision"  # torchvision is likely always available with torch
-        )
+        video_reader_backend = "torchvision"  # torchvision is likely always available with torch
     logger.info(f"qwen-vl-utils using {video_reader_backend} to read video.")
     print(
         f"qwen-vl-utils using {video_reader_backend} to read video.", file=sys.stderr
@@ -560,9 +464,7 @@ def fetch_video(
         process_info.pop("type", None)
         process_info.pop("video", None)
         images = [
-            fetch_image(
-                {"image": video_element, **process_info}, size_factor=image_factor
-            )
+            fetch_image({"image": video_element, **process_info}, size_factor=image_factor)
             for video_element in ele["video"]
         ]
         nframes = ceil_by_factor(len(images), FRAME_FACTOR)
@@ -608,9 +510,7 @@ def process_vision_info(
         if "image" in vision_info or "image_url" in vision_info:
             image_inputs.append(fetch_image(vision_info))
         elif "video" in vision_info:
-            video_input, video_sample_fps = fetch_video(
-                vision_info, return_video_sample_fps=True
-            )
+            video_input, video_sample_fps = fetch_video(vision_info, return_video_sample_fps=True)
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
         else:

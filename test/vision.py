@@ -1,6 +1,8 @@
 from torchvision import io, transforms
 
-video_path = r"file://C:\Users\yigua\Downloads\Bon Iver - Everything Is Peaceful Love (Official Video)-1.mp4"
+video_path = (
+    r"file://C:\Users\yigua\Downloads\Bon Iver - Everything Is Peaceful Love (Official Video)-1.mp4"
+)
 
 video, audio, info = io.read_video(
     video_path,

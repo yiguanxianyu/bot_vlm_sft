@@ -123,9 +123,7 @@ class AgiBotSFTDataSet:
         with av.open(video_path) as container:
             video_stream = container.streams.video[0]
 
-            assert len(container.streams.video) > 0, (
-                f"No video stream found in {video_path}"
-            )
+            assert len(container.streams.video) > 0, f"No video stream found in {video_path}"
             assert video_stream.frames >= num_frames, (
                 f"Video has only {video_stream.frames} frames, but {num_frames} are requested."
             )
