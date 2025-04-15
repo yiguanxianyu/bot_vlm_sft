@@ -1,5 +1,5 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 tars_path = Path("/mnt/nvme/agi_add/observations")
 agi_beta_path = Path("/mnt/nvme/AgiBotWorldBeta/observations")

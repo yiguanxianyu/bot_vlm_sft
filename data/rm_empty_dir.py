@@ -1,6 +1,7 @@
-import huggingface_hub
-from pathlib import Path
 import subprocess
+from pathlib import Path
+
+import huggingface_hub
 
 video_path = Path("/data1/AgiBotWorld-Beta-Output/observations")
 

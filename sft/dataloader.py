@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-import constants as C
+
 import av
 import numpy as np
 

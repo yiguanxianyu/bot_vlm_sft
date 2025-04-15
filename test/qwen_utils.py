@@ -1,4 +1,5 @@
-import json
+import time
+
 from transformers import Qwen2_5_VLProcessor
 from vision_process import process_vision_info
 
@@ -11,7 +12,7 @@ from vision_process import process_vision_info
 min_pixels = 256 * 28 * 28
 max_pixels = 1280 * 28 * 28
 processor = Qwen2_5_VLProcessor.from_pretrained(
-    "Qwen/Qwen2.5-VL-3B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels
+    "Qwen/Qwen2.5-VL-3B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels, use_fast=True
 )
 
 messages = [
@@ -20,17 +21,23 @@ messages = [
         "content": [
             {
                 "type": "video",
-                "video": r"file://C:\Users\yigua\Downloads\Bon Iver - Everything Is Peaceful Love (Official Video)-1.mp4",
+                "video": r"C:\Users\yigua\Downloads\head_color.mp4",
             },
-            {"type": "text", "text": "Describe this image."},
+            {"type": "text", "text": "Describe this video."},
         ],
     }
 ]
 
 # Preparation for inference
 text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-print(video_kwargs)
+
+time1 = time.time()
+image_inputs, video_inputs, video_kwargs = process_vision_info(
+    messages, return_video_kwargs=True, resize_factor=1.0
+)
+time2 = time.time()
+print(f"Time taken: {time2 - time1} seconds", f"{video_inputs[0].shape=}")
+
 inputs = processor(
     text=[text],
     images=image_inputs,

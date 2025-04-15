@@ -22,6 +22,9 @@ from torchvision import io, transforms
 from torchvision.transforms import InterpolationMode
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(logging.StreamHandler(sys.stdout))
+logger.addHandler(logging.FileHandler(filename="logs/vision_process.log"))
 
 IMAGE_FACTOR = 28
 MIN_PIXELS = 4 * 28 * 28
@@ -191,10 +194,7 @@ def smart_nframes(
     return nframes
 
 
-def _read_video_torchvision(
-    ele: dict,
-    resize_factor: float = 1.0,
-) -> (torch.Tensor, float):
+def _read_video_torchvision(ele: dict) -> (torch.Tensor, float):
     """read video using torchvision.io.read_video
 
     Args:
@@ -239,10 +239,7 @@ def is_decord_available() -> bool:
     return importlib.util.find_spec("decord") is not None
 
 
-def _read_video_decord(
-    ele: dict,
-    resize_factor: float = 1.0,
-) -> (torch.Tensor, float):
+def _read_video_decord(ele: dict) -> (torch.Tensor, float):
     """read video using decord.VideoReader
 
     Args:
@@ -281,7 +278,7 @@ def is_pyav_available() -> bool:
     return importlib.util.find_spec("av") is not None
 
 
-def _read_video_pyav(ele: dict, resize_factor: float = 1.0) -> tuple[torch.Tensor, float]:
+def _read_video_pyav(ele: dict) -> tuple[torch.Tensor, float]:
     """read video using av (PyAV) library.
 
     Args:
@@ -302,9 +299,7 @@ def _read_video_pyav(ele: dict, resize_factor: float = 1.0) -> tuple[torch.Tenso
         raise NotImplementedError("PyAV reader does not support start_pts and end_pts for now.")
 
     start_time = time.time()
-    container = None
-    try:
-        container = av.open(video_path)
+    with av.open(video_path) as container:
         stream = container.streams.video[0]
         # stream.codec_context.skip_frame = "NONKEY" # Might skip frames we need
 
@@ -315,14 +310,12 @@ def _read_video_pyav(ele: dict, resize_factor: float = 1.0) -> tuple[torch.Tenso
             duration = float(stream.duration * stream.time_base)
             total_frames = int(duration * video_fps)
             logger.warning(
-                f"PyAV: stream.frames is 0, estimating total_frames as {total_frames} based on duration {duration} and fps {video_fps}."
+                f"PyAV: stream.frames is 0, estimating total_frames as {total_frames} "
+                f"based on duration {duration} and fps {video_fps}."
             )
 
         assert total_frames > 0, "Total frames should be greater than 0."
-
-        logger.info(
-            f"PyAV:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - start_time:.3f}s"
-        )
+        logger.info(f"PyAV: {video_path=}, {total_frames=}, {video_fps=}")
 
         nframes = smart_nframes(ele, total_frames=total_frames, video_fps=video_fps)
         assert total_frames >= nframes, "Cannot proceed with total_frames < nframes."
@@ -340,19 +333,10 @@ def _read_video_pyav(ele: dict, resize_factor: float = 1.0) -> tuple[torch.Tenso
             timestamp_us = int(index * sample_interval)
             container.seek(timestamp_us)
             frame = next(iter(container.decode(video=0)))
-            image = frame.to_image()
-            # ------ resize ------
-            new_width = int(image.width * resize_factor)
-            new_height = int(image.height * resize_factor)
-            image = image.resize(
-                (new_width, new_height),
-                resample=Image.Resampling.LANCZOS,
-            ).convert("RGB")
-            # ------ resize ------
-            image = torch.from_numpy(np.array(image)).permute(2, 0, 1)
+            image = frame.to_rgb().to_ndarray()
             frames.append(image)
 
-        video = torch.stack(frames)  # TCHW, uint8
+        video = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)  # TCHW
         # Use nframes (potentially with duplicates) for sample_fps calculation as it reflects the desired temporal density
         sample_fps = nframes / total_frames * video_fps
 
@@ -360,25 +344,11 @@ def _read_video_pyav(ele: dict, resize_factor: float = 1.0) -> tuple[torch.Tenso
         assert len(frames) >= nframes_unique, "Cannot proceed with len(frames) < nframes_unique."
         # Log final shape and time
         logger.info(
-            f"PyAV: Decoded {video.shape[0]} frames (requested {nframes}), shape={video.shape}, time={time.time() - start_time:.3f}s"
+            f"PyAV: Decoded {video.shape[0]} frames (requested {nframes}), "
+            f"shape={video.shape}, "
+            f"time={time.time() - start_time:.3f}s"
         )
         return video, sample_fps
-
-    except av.AVError as e:
-        logger.error(f"PyAV Error processing video {video_path}: {e}")
-        raise  # Re-raise the exception
-    except FileNotFoundError:
-        logger.error(f"PyAV Error: Video file not found at {video_path}")
-        raise
-    except IndexError:
-        logger.error(f"PyAV Error: No video stream found in {video_path}")
-        raise ValueError(f"PyAV: No video stream found in {video_path}")
-    except Exception as e:
-        logger.error(f"Unexpected error processing video {video_path} with PyAV: {e}")
-        raise  # Re-raise the exception
-    finally:
-        if container:
-            container.close()
 
 
 VIDEO_READER_BACKENDS = {
@@ -402,15 +372,14 @@ def get_video_reader_backend() -> str:
     else:
         video_reader_backend = "torchvision"  # torchvision is likely always available with torch
     logger.info(f"qwen-vl-utils using {video_reader_backend} to read video.")
-    print(
-        f"qwen-vl-utils using {video_reader_backend} to read video.", file=sys.stderr
-    )  # Use logger instead
     return video_reader_backend
-    # return "pyav"
 
 
 def fetch_video(
-    ele: dict, image_factor: int = IMAGE_FACTOR, return_video_sample_fps: bool = False
+    ele: dict,
+    image_factor: int = IMAGE_FACTOR,
+    return_video_sample_fps: bool = False,
+    resize_factor: float = 1.0,
 ) -> torch.Tensor | list[Image.Image]:
     if isinstance(ele["video"], str):
         video_reader_backend = get_video_reader_backend()
@@ -422,7 +391,11 @@ def fetch_video(
             )
             video, sample_fps = VIDEO_READER_BACKENDS["torchvision"](ele)
 
-        nframes, _, height, width = video.shape
+        # Apply resize factor to the video
+        nframes, _channels, height, width = video.shape
+        height = int(height * resize_factor)
+        width = int(width * resize_factor)
+
         min_pixels = ele.get("min_pixels", VIDEO_MIN_PIXELS)
         total_pixels = ele.get("total_pixels", VIDEO_TOTAL_PIXELS)
         max_pixels = max(
@@ -496,6 +469,7 @@ def extract_vision_info(conversations: list[dict] | list[list[dict]]) -> list[di
 def process_vision_info(
     conversations: list[dict] | list[list[dict]],
     return_video_kwargs: bool = False,
+    resize_factor: float = 1.0,
 ) -> tuple[
     list[Image.Image] | None,
     list[torch.Tensor | list[Image.Image]] | None,
@@ -510,7 +484,11 @@ def process_vision_info(
         if "image" in vision_info or "image_url" in vision_info:
             image_inputs.append(fetch_image(vision_info))
         elif "video" in vision_info:
-            video_input, video_sample_fps = fetch_video(vision_info, return_video_sample_fps=True)
+            video_input, video_sample_fps = fetch_video(
+                vision_info,
+                return_video_sample_fps=True,
+                resize_factor=resize_factor,
+            )
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
         else:
