@@ -1,8 +1,6 @@
 import subprocess
 from pathlib import Path
 
-import huggingface_hub
-
 video_path = Path("/data1/AgiBotWorld-Beta-Output/observations")
 
 for i in video_path.glob("*"):

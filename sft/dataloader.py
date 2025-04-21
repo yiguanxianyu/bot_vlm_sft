@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List
 
 import av
 import numpy as np
@@ -140,7 +140,7 @@ class AgiBotSFTDataSet:
                 image = next(iter(frame)).to_rgb().to_ndarray()
                 frames.append(image)
 
-        return frames  # F, H, W, C
+        return frames  # T, H, W, C
 
 
 if __name__ == "__main__":
